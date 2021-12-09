@@ -364,7 +364,17 @@ public:
             layer_info->inputs.push_back(inputs[input_index]->debugName());
 
             auto layer_res            = new EltwiseLayerResource();
-            auto element_buf          = getValue(inputs[weight_input_index]);
+            // TODO: DO NOT USE THIS MODIFICATION
+            //       will cause problem when both input0 and input1 are INT TYPE!!!
+            //auto element_buf          = getValue(inputs[weight_input_index]);
+            RawBuffer element_buf;
+            if (inputs[weight_input_index]->type()->kind()==c10::TypeKind::IntType) {
+                float data_fp32 = float(getValue<int64_t>(inputs[weight_input_index]));
+                RawBuffer data_buf = RawBuffer(4, (char*)(&data_fp32), {});
+                element_buf = ConvertHalfHandle(data_buf);
+            } else {
+                element_buf = getValue(inputs[weight_input_index]);
+            }
             layer_res->element_handle = ConvertHalfHandle(element_buf);
             layer_res->element_shape  = element_buf.GetBufferDims();
 
@@ -479,45 +489,78 @@ public:
 class LinearTorchConverter : public TorchOpConverter {
 public:
     Status Convert(const torch::jit::Node *node, NetStructure *net_structure, NetResource *net_resource) {
-        std::shared_ptr<LayerInfo> layer_info = std::make_shared<LayerInfo>();
-        layer_info->type = LAYER_INNER_PRODUCT;
-        layer_info->type_str = "InnerProduct";
-        layer_info->name = node->output(0)->debugName();
-
+        // Turn Linear into matmul + add (with bias), matmul only (without bias)
         const auto& inputs = node->inputs();
-
-        layer_info->inputs.push_back(node->inputs()[0]->debugName());
-        layer_info->outputs.push_back(node->outputs()[0]->debugName());
-
-        auto layer_param = std::make_shared<InnerProductLayerParam>();
-        auto layer_res = new(InnerProductLayerResource);
         const auto weight = inputs[1];
         const auto bias = inputs[2];
+        auto bias_buf = getValue(bias);
+        bool with_bias = bias_buf.GetBytesSize()!=0;
+        std::string matmul_out_name = with_bias ? node->output(0)->debugName()+"_matmul" : node->output(0)->debugName();
+        
+        // matmul
+        std::shared_ptr<LayerInfo> layer_info = std::make_shared<LayerInfo>();
+        layer_info->type = LAYER_MATMUL;
+        layer_info->type_str = "Matmul";
+        layer_info->name = matmul_out_name;
+
+        layer_info->inputs.push_back(node->inputs()[0]->debugName());
+        layer_info->outputs.push_back(matmul_out_name);
 
         auto weight_buf = getValue(weight);
-        auto shape = weight_buf.GetBufferDims();
-
-        // set param accroding to real value, just test here
-        layer_param->name = layer_info->name;
-        layer_param->num_output = shape[0];
-        layer_param->axis = 1;
-
-        layer_res->name = layer_info->name;
-        layer_res->weight_handle = ConvertHalfHandle(weight_buf);
-
-        auto bias_buf = getValue(bias);
-        if (bias_buf.GetBytesSize() != 0) {
-            layer_param->has_bias = 1;
-            layer_res->bias_handle = ConvertHalfHandle(bias_buf);
+        /// TODO: Naive 2D weight Transpose, replace this one with a new faster one in the future.
+        auto *weight_ptr = weight_buf.force_to<float *>();
+        const int dim0 = weight_buf.GetBufferDims()[0];
+        const int dim1 = weight_buf.GetBufferDims()[1];
+        const int weight_byte_size = sizeof(float)*dim0*dim1;
+        float *temp_weight_ptr = (float*)malloc(weight_byte_size);
+        for (int i=0; i<dim0; i++) {
+            for (int j=0; j<dim1; j++) {
+                temp_weight_ptr[j*dim0+i] = weight_ptr[i*dim1+j];
+            }
         }
+        memcpy(weight_ptr, temp_weight_ptr, weight_byte_size);
+        RawBuffer transposed_weight_buf = RawBuffer(weight_byte_size, (char*)(weight_ptr), {dim1, dim0});
+        free(temp_weight_ptr);
+        
+        auto layer_res = new MatMulLayerResource();
+        layer_res->weight = ConvertHalfHandle(transposed_weight_buf);
 
+        auto layer_param = std::make_shared<MatMulLayerParam>();
+        layer_param->weight_position = 1;
+        layer_param->matrix_b_dims = transposed_weight_buf.GetBufferDims();
         layer_info->param = layer_param;
+
+        ADD_INPUTS_AND_OUTPUTS;
 
         net_structure->layers.push_back(layer_info);
         net_resource->resource_map[layer_info->name] = std::shared_ptr<LayerResource>(layer_res);
 
-        ADD_INPUTS_AND_OUTPUTS;
+        if (with_bias) {
+            // add bias
+            std::shared_ptr<LayerInfo> layer2_info = std::make_shared<LayerInfo>();
+            layer2_info->type = LAYER_ADD;
+            layer2_info->type_str = "Add";
+            layer2_info->name = node->output(0)->debugName();
 
+            // bias->node()->kind() == at::prim::Constant, weight here refers to "bias" of linear.
+            auto layer2_param = std::make_shared<MultidirBroadcastLayerParam>();
+            layer2_param->weight_input_index = 1;
+            layer2_info->param = layer2_param;
+            layer2_info->inputs.push_back(matmul_out_name);
+            layer2_info->outputs.push_back(node->outputs()[0]->debugName());
+
+            auto layer2_res = new EltwiseLayerResource();
+            net_resource->resource_map[layer2_info->name] = std::shared_ptr<LayerResource>(layer2_res);
+
+            auto bias_buf = getValue(bias);
+            layer2_res->element_handle = ConvertHalfHandle(bias_buf);
+            layer2_res->element_shape  = bias_buf.GetBufferDims();
+
+            net_structure->layers.push_back(layer2_info);
+            net_structure->blobs.insert(layer2_info->inputs[0]);
+            net_structure->blobs.insert(layer2_info->outputs[0]);
+        }
+        
         return TNN_OK;
     }
 };
