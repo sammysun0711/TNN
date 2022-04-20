@@ -3,8 +3,11 @@
 #include "openvino_network.h"
 #include <string.h>
 
-#include <inference_engine.hpp>
-#include <ngraph/ngraph.hpp>
+//#include <inference_engine.hpp>
+//#include <ngraph/ngraph.hpp>
+//#include <ie_iextension.h>
+#include <ie_extension.h>
+//#include <openvino/core/extension.hpp>
 
 #include "tnn/core/blob_int8.h"
 #include "tnn/core/profile.h"
@@ -85,16 +88,30 @@ Status OpenVINONetwork_::Init(NetworkConfig &net_config, ModelConfig &model_conf
     // build ngraph network
     RETURN_ON_NEQ(BuildNgraphNetwork(net_structure), TNN_OK);
     //////////////////////////////////////////////////////////////
+    /**
     std::map<std::string, std::string> config = {
         {CONFIG_KEY(CPU_THREADS_NUM), "1"},
         {CONFIG_KEY(CPU_THROUGHPUT_STREAMS), "0"},
         {CONFIG_KEY(CPU_BIND_THREAD), "NO"},
     };
+    **/
 
-    ie_.SetConfig(config, "CPU");
+    //ie_.SetConfig(config, "CPU");
+    std::map<std::string, ov::Any> config = {
+        {CONFIG_KEY(CPU_THREADS_NUM), "1"},
+        {CONFIG_KEY(CPU_THROUGHPUT_STREAMS), "0"},
+        {CONFIG_KEY(CPU_BIND_THREAD), "NO"},
+    };
+
+    ie_.set_property("CPU", config);
     InferenceEngine::IExtensionPtr extensionPtr;
+    //InferenceEngine::Extension extensionPtr;
+    //ov::Extension::Ptr extensionPtr;
+
     extensionPtr = std::make_shared<CustomOpenvinoLayerManager>();
-    ie_.AddExtension(extensionPtr, "CPU");
+    //ie_.AddExtension(extensionPtr, "CPU");
+    //ie_.add_extension(extensionPtr, "CPU");
+    ie_.add_extension(extensionPtr);
 
     return Reshape(max_inputs_shape);
 }
@@ -127,27 +144,36 @@ Status OpenVINONetwork_::SetNetInputNode() {
 
 Status OpenVINONetwork_::BuildNgraphNetwork(NetStructure *net_structure) {
 
-    ngraph::ParameterVector input_nodes;
+    //ngraph::ParameterVector input_nodes;
+    ov::ParameterVector input_nodes;
     for(auto it : net_structure->inputs_shape_map) {
         auto name = it.first;
         auto input_tensor = dynamic_cast<ForeignBlob*>(blob_manager_->GetBlob(name))->GetForeignTensor();
         auto input_openvino_tensor = std::dynamic_pointer_cast<OpenvinoTensor>(input_tensor);
-        input_nodes.push_back(std::dynamic_pointer_cast<ngraph::op::Parameter>(input_openvino_tensor->GetNode()));
+        //input_nodes.push_back(std::dynamic_pointer_cast<ngraph::op::Parameter>(input_openvino_tensor->GetNode()));
+	input_nodes.push_back(std::dynamic_pointer_cast<ov::opset8::Parameter>(input_openvino_tensor->GetNode()));
     }
 
-    ngraph::NodeVector output_nodes;
+    //ngraph::NodeVector output_nodes;
+    //ov::NodeVector output_nodes;
+    ov::ResultVector output_nodes;
     for (auto name : net_structure->outputs) {
         auto output_tensor = dynamic_cast<ForeignBlob*>(blob_manager_->GetBlob(name))->GetForeignTensor();
         auto output_openvino_tensor = std::dynamic_pointer_cast<OpenvinoTensor>(output_tensor);
         output_openvino_tensor->GetNode()->set_friendly_name(name);
-        auto result_node = std::make_shared<ngraph::op::Result>(output_openvino_tensor->GetNode());
+        //auto result_node = std::make_shared<ngraph::op::Result>(output_openvino_tensor->GetNode());
+	auto result_node = std::make_shared<ov::opset8::Result>(output_openvino_tensor->GetNode());
         output_nodes.push_back(result_node);
     } 
     
-    std::shared_ptr<ngraph::Function> node_funtion = std::make_shared<ngraph::Function>(
-         output_nodes, input_nodes, "net");
+    //std::shared_ptr<ngraph::Function> node_funtion = std::make_shared<ngraph::Function>(
+    //     output_nodes, input_nodes, "net");
+    //std::shared_ptr<ov::Model> node_funtion = std::make_shared<ov::Model>(
+    //     output_nodes, input_nodes, "net");
+    network_ = std::make_shared<ov::Model>(output_nodes, input_nodes, "net");
 
-    network_ =  std::make_shared<InferenceEngine::CNNNetwork>(node_funtion);
+    //network_ =  std::make_shared<ov::Model>(node_funtion);
+
     return TNN_OK;
 }
 
@@ -179,9 +205,16 @@ Status OpenVINONetwork_::GetAllOutputBlobs(BlobMap &blobs) {
 
 Status OpenVINONetwork_::Reshape(const InputShapesMap &inputs) {
     RETURN_ON_NEQ(DefaultNetwork::Reshape(inputs), TNN_OK);
+    std::map<std::string, ov::PartialShape> network_shapes;
+    for (const ov::Output<ov::Node>& input : network_->inputs()) {
+        ov::PartialShape shape = input.get_partial_shape();
+	std::string input_name = input.get_any_name();
+	network_shapes[input_name] = shape;
+    }
 
-    auto network_shapes = network_->getInputShapes();
+    //auto network_shapes = network_->getInputShapes();
 
+    /*
     for(auto item : inputs) {
         std::string input_name = item.first;
         if (network_shapes.find(input_name) == network_shapes.end()) {
@@ -191,19 +224,47 @@ Status OpenVINONetwork_::Reshape(const InputShapesMap &inputs) {
             return TNNERR_PARAM_ERR;
         }
 
-        InferenceEngine::SizeVector input_shape;
+        ov::SizeVector input_shape;
         for(int i=0;i<item.second.size();i++) {
             input_shape.push_back(item.second[i]);
         }
         network_shapes[input_name] = input_shape;
 
+    }*/
+    for(auto item : inputs) {
+        std::string input_name = item.first;
+        if (network_shapes.find(input_name) == network_shapes.end()) {
+            return TNNERR_PARAM_ERR;
+        }
+        if (item.second.size() != network_shapes.find(input_name)->second.size()) {
+            return TNNERR_PARAM_ERR;
+        }
+	
+	//ov::SizeVector input_shape;
+	//std::vector<ov::PartialShape> input_shape;
+	//std::vector<size_t> input_shape
+	std::vector<ov::Dimension> dimensions;
+
+        for(int i=0;i<item.second.size();i++) {
+	    ov::Dimension dimension = ov::Dimension(item.second[i]);
+	    dimensions.push_back(dimension);
+            //input_shape.push_back(item.second[i]);
+        }
+	ov::PartialShape input_shape = ov::PartialShape(dimensions);
+
+        network_shapes[input_name] = input_shape;
+
     }
+
 
     network_->reshape(network_shapes);
 
-    executable_network_ = ie_.LoadNetwork(*network_, "CPU");
-    infer_request_ = executable_network_.CreateInferRequest();
-
+    //executable_network_ = ie_.LoadNetwork(*network_, "CPU");
+    executable_network_ = ie_.compile_model(network_, "CPU");
+    //infer_request_ = executable_network_.CreateInferRequest();
+    infer_request_ = executable_network_.create_infer_request();
+    
+    /*
     auto input_map = executable_network_.GetInputsInfo();
     for(auto item : input_map) {
         std::string key = item.first;
@@ -220,7 +281,7 @@ Status OpenVINONetwork_::Reshape(const InputShapesMap &inputs) {
         }
 
         BlobHandle handle;
-        handle.base = blob_ptr->buffer().as<InferenceEngine::PrecisionTrait<InferenceEngine::Precision::FP32>::value_type*>();
+        handle.base = blob_ptr->buffer().as<ov::PrecisionTrait<ov::Precision::FP32>::value_type*>();	
 
         if (input_blob_map_.find(key) != input_blob_map_.end())  {
             input_blob_map_[key]->SetBlobDesc(desc);
@@ -229,7 +290,50 @@ Status OpenVINONetwork_::Reshape(const InputShapesMap &inputs) {
             input_blob_map_[key] = new Blob(desc, handle);  
         }
     }
+    */
 
+    //auto input_map = executable_network_.GetInputsInfo();
+    const std::vector<ov::Output<const ov::Node>>& inputs_info = executable_network_.inputs();
+    //for(auto item : input_map) {
+    for (int i = 0; i < inputs_info.size(); i++) {
+	ov::Output<const ov::Node> item = inputs_info[i];
+        //std::string key = item.first;
+	std::string key = item.get_any_name();
+        //auto blob_ptr = infer_request_.GetBlob(key);
+	ov::Tensor tensor = infer_request_.get_tensor(key);
+	const std::shared_ptr<ov::descriptor::Tensor> tensor_ptr = item.get_tensor_ptr();
+	
+	//ov::descriptor::Tensor& item.get_tensor();
+
+        BlobDesc desc;
+        desc.data_format = DATA_FORMAT_NCHW;
+        //desc.name = key;
+	desc.name = key;
+        desc.device_type = DEVICE_X86;
+        //desc.data_type = ConvertOVPrecisionToDataType(blob_ptr->getTensorDesc().getPrecision());
+	const ov::element::Type& element_type = tensor_ptr->get_element_type();
+	desc.data_type = ConvertOVPrecisionToDataType(element_type);
+
+        //auto dims = blob_ptr->getTensorDesc().getDims();
+	//const PartialShape& pshape = tensor_ptr->get_partial_shape();
+	const ov::Shape dims = tensor_ptr->get_shape();
+        for(int index = 0; index<dims.size(); index++) {
+            desc.dims.push_back(dims[index]);
+        }
+
+        BlobHandle handle;
+        //handle.base = blob_ptr->buffer().as<ov::PrecisionTrait<ov::Precision::FP32>::value_type*>();
+	//handle.base = tensor.data().as<ov::element_type_traits<ov::element::Type_t::f32>::value_type*>();
+	handle.base = tensor.data<ov::element_type_traits<ov::element::f32>::value_type*>();
+
+        if (input_blob_map_.find(key) != input_blob_map_.end())  {
+            input_blob_map_[key]->SetBlobDesc(desc);
+            input_blob_map_[key]->SetHandle(handle);
+        } else {
+            input_blob_map_[key] = new Blob(desc, handle);
+        }
+    }
+    /***
     auto output_map = executable_network_.GetOutputsInfo();
     for(auto item : output_map) {
         std::string key = item.first;
@@ -244,7 +348,7 @@ Status OpenVINONetwork_::Reshape(const InputShapesMap &inputs) {
             desc.dims.push_back(dims[index]);
         }
         BlobHandle handle;
-        handle.base = blob_ptr->buffer().as<InferenceEngine::PrecisionTrait<InferenceEngine::Precision::FP32>::value_type*>();
+        handle.base = blob_ptr->buffer().as<ov::PrecisionTrait<ov::Precision::FP32>::value_type*>();
         if (output_blob_map_.find(key) != output_blob_map_.end())  {
             output_blob_map_[key]->SetBlobDesc(desc);
             output_blob_map_[key]->SetHandle(handle);
@@ -252,6 +356,42 @@ Status OpenVINONetwork_::Reshape(const InputShapesMap &inputs) {
             output_blob_map_[key] = new Blob(desc, handle);  
         }
     }
+    ***/
+    //auto output_map = executable_network_.GetOutputsInfo();
+    const std::vector<ov::Output<const ov::Node>>& outputs_info = executable_network_.outputs();
+    //for(auto item : output_map) {
+    for (int i = 0; i < outputs_info.size(); i++) {
+        ov::Output<const ov::Node> item = outputs_info[i];
+        //std::string key = item.first;
+	std::string key = item.get_any_name();
+        //auto blob_ptr = infer_request_.GetBlob(key);
+	ov::Tensor tensor = infer_request_.get_tensor(key);
+	const std::shared_ptr<ov::descriptor::Tensor> tensor_ptr = item.get_tensor_ptr();
+
+        BlobDesc desc;
+        desc.data_format = DATA_FORMAT_NCHW;
+        desc.name = key;
+        desc.device_type = DEVICE_X86;
+        
+	//desc.data_type = ConvertOVPrecisionToDataType(blob_ptr->getTensorDesc().getPrecision());
+	const ov::element::Type& element_type = tensor_ptr->get_element_type();
+	desc.data_type = ConvertOVPrecisionToDataType(element_type);
+        //auto dims = blob_ptr->getTensorDesc().getDims();
+	const ov::Shape dims = tensor_ptr->get_shape();
+        for(int index = 0; index<dims.size(); index++) {
+            desc.dims.push_back(dims[index]);
+        }
+        BlobHandle handle;
+        //handle.base = blob_ptr->buffer().as<ov::PrecisionTrait<ov::Precision::FP32>::value_type*>();
+	handle.base = tensor.data<ov::element_type_traits<ov::element::f32>::value_type*>();
+        if (output_blob_map_.find(key) != output_blob_map_.end())  {
+            output_blob_map_[key]->SetBlobDesc(desc);
+            output_blob_map_[key]->SetHandle(handle);
+        } else {
+            output_blob_map_[key] = new Blob(desc, handle);
+        }
+    }
+
 
     return TNN_OK;
 }
@@ -382,7 +522,8 @@ Status OpenVINONetwork_::GetCommandQueue(void **command_queue) {
 }
 
 Status OpenVINONetwork_::Forward() {
-    infer_request_.Infer();
+    //infer_request_.Infer();
+    infer_request_.infer();
 #if TNN_PROFILE
     auto perf_count = infer_request_.GetPerformanceCounts();
     for (auto iter : perf_count) {
@@ -405,12 +546,22 @@ Status OpenVINONetwork_::ForwardAsync(Callback call_back) {
 }
 
 Status OpenVINONetwork_::SetCpuNumThreads(int num_threads) {
+    /*
     std::map<std::string, std::string> config = {
         {CONFIG_KEY(CPU_THREADS_NUM), ToString(num_threads)},
         {CONFIG_KEY(CPU_THROUGHPUT_STREAMS), "0"},
         {CONFIG_KEY(CPU_BIND_THREAD), "NO"},
     };
     ie_.SetConfig(config, "CPU");
+    */
+    std::map<std::string, ov::Any> config = {
+        {CONFIG_KEY(CPU_THREADS_NUM), ToString(num_threads)},
+        {CONFIG_KEY(CPU_THROUGHPUT_STREAMS), "0"},
+        {CONFIG_KEY(CPU_BIND_THREAD), "NO"},
+    };
+
+    ie_.set_property("CPU", config);
+
 
     BlobMap input_blobs;
     blob_manager_->GetAllInputBlobs(input_blobs);

@@ -16,7 +16,8 @@
 
 #include <memory>
 
-#include <ngraph/node.hpp>
+//#include <ngraph/node.hpp>
+#include "openvino/core/node.hpp"
 
 #include "tnn/core/blob.h"
 #include "tnn/extern_wrapper/foreign_tensor.h"
@@ -29,7 +30,8 @@ OpenvinoTensor::OpenvinoTensor() {
 }
 
 //@brief create OpenvinoTensor with ngraph::Node
-OpenvinoTensor::OpenvinoTensor(std::shared_ptr<ngraph::Node> node) {
+//OpenvinoTensor::OpenvinoTensor(std::shared_ptr<ngraph::Node> node) {
+OpenvinoTensor::OpenvinoTensor(std::shared_ptr<ov::Node> node) {
     node_ = node;
 }
 
@@ -38,12 +40,14 @@ OpenvinoTensor::~OpenvinoTensor() {
 }
 
 //@brief get the ForeignTensor
-std::shared_ptr<ngraph::Node> OpenvinoTensor::GetNode() {
+//std::shared_ptr<ngraph::Node> OpenvinoTensor::GetNode() {
+std::shared_ptr<ov::Node> OpenvinoTensor::GetNode() {
     return node_;
 }
 
 //@brief set the ForeignTensor
-Status OpenvinoTensor::SetNode(std::shared_ptr<ngraph::Node> node) {
+//Status OpenvinoTensor::SetNode(std::shared_ptr<ngraph::Node> node) {
+Status OpenvinoTensor::SetNode(std::shared_ptr<ov::Node> node) {
     node_ = node;
     return TNN_OK;
 }

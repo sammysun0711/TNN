@@ -15,7 +15,7 @@
 #include "tnn/network/openvino/utils.h"
 
 namespace TNN_NS {
-
+/*
 ngraph::element::Type_t ConvertToOVDataType(DataType type) {
     switch (type) {
         case DATA_TYPE_FLOAT:
@@ -31,8 +31,24 @@ ngraph::element::Type_t ConvertToOVDataType(DataType type) {
         default:
             return ngraph::element::Type_t::f32;
     }
+}*/
+ov::element::Type_t ConvertToOVDataType(DataType type) {
+    switch (type) {
+        case DATA_TYPE_FLOAT:
+            return ov::element::Type_t::f32;
+        case DATA_TYPE_HALF:
+            return ov::element::Type_t::f16;
+        case DATA_TYPE_INT64:
+            return ov::element::Type_t::i64;
+        case DATA_TYPE_INT32:
+            return ov::element::Type_t::i32;
+        case DATA_TYPE_INT8:
+            return ov::element::Type_t::i8;
+        default:
+            return ov::element::Type_t::f32;
+    }
 }
-
+/*
 DataType ConvertOVPrecisionToDataType(const InferenceEngine::Precision &precision) {
     switch (precision.getPrecVal()) {
         case InferenceEngine::Precision::FP32:
@@ -47,7 +63,27 @@ DataType ConvertOVPrecisionToDataType(const InferenceEngine::Precision &precisio
             return DATA_TYPE_FLOAT;
     }
 }
+*/
+DataType ConvertOVPrecisionToDataType(const ov::element::Type &precision) {
+    switch (precision) {
+        //case InferenceEngine::Precision::FP32:
+	case ov::element::Type_t::f32:
+            return DATA_TYPE_FLOAT;
+        //case InferenceEngine::Precision::FP16:
+	case ov::element::Type_t::f16:
+            return DATA_TYPE_HALF;
+        //case InferenceEngine::Precision::I32:
+	case ov::element::Type_t::i32:
+            return DATA_TYPE_INT32;
+        //case InferenceEngine::Precision::I8:
+	case ov::element::Type_t::i8:
+            return DATA_TYPE_INT8;
+        default:
+            return DATA_TYPE_FLOAT;
+    }
+}
 
+/*
 std::shared_ptr<ngraph::op::Constant> ConvertToConstNode(RawBuffer *buffer) {
     ngraph::Shape constShape;
 
@@ -62,5 +98,21 @@ std::shared_ptr<ngraph::op::Constant> ConvertToConstNode(RawBuffer *buffer) {
     return std::make_shared<ngraph::op::Constant>(ConvertToOVDataType(buffer->GetDataType()), constShape,
                                                   buffer->force_to<void *>());
 }
+*/
+std::shared_ptr<ov::opset8::Constant> ConvertToConstNode(RawBuffer *buffer) {
+    ov::Shape constShape;
+
+    if (buffer->GetBufferDims().size() == 0 && buffer->GetBytesSize() == 0) {
+        return std::make_shared<ov::opset8::Constant>();
+    }
+
+    for (auto &iter : buffer->GetBufferDims()) {
+        constShape.push_back(iter);
+    }
+
+    return std::make_shared<ov::opset8::Constant>(ConvertToOVDataType(buffer->GetDataType()), constShape,
+                                                  buffer->force_to<void *>());
+}
+
 
 }  //  namespace TNN_NS

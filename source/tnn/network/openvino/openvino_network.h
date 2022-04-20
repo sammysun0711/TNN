@@ -5,7 +5,8 @@
 
 #include <vector>
 
-#include <inference_engine.hpp>
+//#include <inference_engine.hpp>
+#include <openvino/openvino.hpp>
 
 #include "tnn/core/abstract_network.h"
 #include "tnn/core/default_network.h"
@@ -87,11 +88,12 @@ public:
 private:
     virtual Status InitLayers(NetStructure *net_structure, NetResource *net_resource);
   
-    InferenceEngine::Core ie_;
-    // InferenceEngine::CNNNetwork network_;
-    std::shared_ptr<InferenceEngine::CNNNetwork> network_;
-    InferenceEngine::ExecutableNetwork executable_network_;
-    InferenceEngine::InferRequest infer_request_;
+    ov::Core ie_;
+    // ov::CNNNetwork network_;
+    // std::shared_ptr<InferenceEngine::CNNNetwork> network_;
+    std::shared_ptr<ov::Model> network_;
+    ov::CompiledModel executable_network_;
+    ov::InferRequest infer_request_;
     BlobMap input_blob_map_;
     BlobMap output_blob_map_;
 };

@@ -19,8 +19,10 @@
 #include <map>
 #include <string>
 
-#include <ngraph/node.hpp>
-#include <ngraph/op/op.hpp>
+//#include <ngraph/node.hpp>
+#include "openvino/core/node.hpp"
+//#include <ngraph/op/op.hpp>
+#include "openvino/op/op.hpp"
 
 #include "tnn/core/common.h"
 #include "tnn/core/macro.h"
@@ -40,13 +42,16 @@ public:
     virtual ~OpenvinoTensor();
 
     //@brief get the ForeignTensor
-    std::shared_ptr<ngraph::Node> GetNode();
+    //std::shared_ptr<ngraph::Node> GetNode();
+    std::shared_ptr<ov::Node> GetNode();
 
     //@brief set the ForeignTensor
-    Status SetNode(std::shared_ptr<ngraph::Node> node);
+    // Status SetNode(std::shared_ptr<ngraph::Node> node);
+    Status SetNode(std::shared_ptr<ov::Node> node);
 
 protected:
-    std::shared_ptr<ngraph::Node> node_;
+    //std::shared_ptr<ngraph::Node> node_;
+    std::shared_ptr<ov::Node> node_;
 };
 
 }  // namespace TNN_NS

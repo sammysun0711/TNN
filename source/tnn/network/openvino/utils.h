@@ -15,12 +15,16 @@
 #ifndef TNN_SOURCE_TNN_NETWORK_OPENVINO_UTILS_H_
 #define TNN_SOURCE_TNN_NETWORK_OPENVINO_UTILS_H_
 
-#include <ie_precision.hpp>
-#include <ngraph/ngraph.hpp>
-#include <ngraph/node.hpp>
-#include <ngraph/op/op.hpp>
-#include <ngraph/opsets/opset.hpp>
-#include <ngraph/opsets/opset1.hpp>
+//#include <ie_precision.hpp>
+#include "openvino/openvino.hpp"
+#include "openvino/opsets/opset1.hpp"
+#include "openvino/opsets/opset8.hpp"
+
+//#include <ngraph/ngraph.hpp>
+//#include <ngraph/node.hpp>
+//#include <ngraph/op/op.hpp>
+//#include <ngraph/opsets/opset.hpp>
+//#include <ngraph/opsets/opset1.hpp>
 
 #include "tnn/core/common.h"
 #include "tnn/core/macro.h"
@@ -42,9 +46,12 @@ namespace TNN_NS {
     outputNodes.push_back(customNode);                                                                                 \
     SetOutputTensors(outputNodes);
 
-ngraph::element::Type_t ConvertToOVDataType(DataType type);
-std::shared_ptr<ngraph::op::Constant> ConvertToConstNode(RawBuffer *buffer);
-DataType ConvertOVPrecisionToDataType(const InferenceEngine::Precision &precision);
+//ngraph::element::Type_t ConvertToOVDataType(DataType type);
+ov::element::Type_t ConvertToOVDataType(DataType type);
+//std::shared_ptr<ngraph::op::Constant> ConvertToConstNode(RawBuffer *buffer);
+std::shared_ptr<ov::opset8::Constant> ConvertToConstNode(RawBuffer *buffer);
+//DataType ConvertOVPrecisionToDataType(const InferenceEngine::Precision &precision);
+DataType ConvertOVPrecisionToDataType(const ov::element::Type &precision);
 
 }  //  namespace TNN_NS
 
