@@ -104,13 +104,12 @@ Status OpenVINONetwork_::Init(NetworkConfig &net_config, ModelConfig &model_conf
     };
 
     ie_.set_property("CPU", config);
-    InferenceEngine::IExtensionPtr extensionPtr;
+
     //InferenceEngine::Extension extensionPtr;
-    //ov::Extension::Ptr extensionPtr;
+    InferenceEngine::IExtensionPtr extensionPtr;
 
     extensionPtr = std::make_shared<CustomOpenvinoLayerManager>();
     //ie_.AddExtension(extensionPtr, "CPU");
-    //ie_.add_extension(extensionPtr, "CPU");
     ie_.add_extension(extensionPtr);
 
     return Reshape(max_inputs_shape);
@@ -143,36 +142,34 @@ Status OpenVINONetwork_::SetNetInputNode() {
 }
 
 Status OpenVINONetwork_::BuildNgraphNetwork(NetStructure *net_structure) {
-
     //ngraph::ParameterVector input_nodes;
     ov::ParameterVector input_nodes;
     for(auto it : net_structure->inputs_shape_map) {
         auto name = it.first;
+	//LOGI("name: %s  \n", name.c_str());
         auto input_tensor = dynamic_cast<ForeignBlob*>(blob_manager_->GetBlob(name))->GetForeignTensor();
         auto input_openvino_tensor = std::dynamic_pointer_cast<OpenvinoTensor>(input_tensor);
+	input_openvino_tensor->GetNode()->set_friendly_name(name);
         //input_nodes.push_back(std::dynamic_pointer_cast<ngraph::op::Parameter>(input_openvino_tensor->GetNode()));
 	input_nodes.push_back(std::dynamic_pointer_cast<ov::opset8::Parameter>(input_openvino_tensor->GetNode()));
     }
 
     //ngraph::NodeVector output_nodes;
-    //ov::NodeVector output_nodes;
-    ov::ResultVector output_nodes;
+    ov::NodeVector output_nodes;
     for (auto name : net_structure->outputs) {
+	//LOGI("name: %s  \n", name.c_str());
         auto output_tensor = dynamic_cast<ForeignBlob*>(blob_manager_->GetBlob(name))->GetForeignTensor();
         auto output_openvino_tensor = std::dynamic_pointer_cast<OpenvinoTensor>(output_tensor);
-        output_openvino_tensor->GetNode()->set_friendly_name(name);
+        //output_openvino_tensor->GetNode()->set_friendly_name(name);
         //auto result_node = std::make_shared<ngraph::op::Result>(output_openvino_tensor->GetNode());
 	auto result_node = std::make_shared<ov::opset8::Result>(output_openvino_tensor->GetNode());
+	result_node->set_friendly_name(name);
         output_nodes.push_back(result_node);
     } 
     
     //std::shared_ptr<ngraph::Function> node_funtion = std::make_shared<ngraph::Function>(
     //     output_nodes, input_nodes, "net");
-    //std::shared_ptr<ov::Model> node_funtion = std::make_shared<ov::Model>(
-    //     output_nodes, input_nodes, "net");
     network_ = std::make_shared<ov::Model>(output_nodes, input_nodes, "net");
-
-    //network_ =  std::make_shared<ov::Model>(node_funtion);
 
     return TNN_OK;
 }
@@ -205,14 +202,19 @@ Status OpenVINONetwork_::GetAllOutputBlobs(BlobMap &blobs) {
 
 Status OpenVINONetwork_::Reshape(const InputShapesMap &inputs) {
     RETURN_ON_NEQ(DefaultNetwork::Reshape(inputs), TNN_OK);
-    std::map<std::string, ov::PartialShape> network_shapes;
-    for (const ov::Output<ov::Node>& input : network_->inputs()) {
-        ov::PartialShape shape = input.get_partial_shape();
-	std::string input_name = input.get_any_name();
-	network_shapes[input_name] = shape;
-    }
 
     //auto network_shapes = network_->getInputShapes();
+    //std::map<std::string, ov::PartialShape> network_shapes;
+    std::map<std::size_t, ov::PartialShape> network_shapes;
+    for (const ov::Output<ov::Node>& input : network_->inputs()) {
+        ov::PartialShape pshape = input.get_partial_shape();
+	std::string input_name = input.get_node()->get_friendly_name();
+	std::size_t input_idx = input.get_index();
+	//LOGI("Input input_name: %s \n", input_name.c_str());
+	//LOGI("Input input_index: %lu \n", input_idx);
+	//network_shapes[input_name] = shape;
+	network_shapes.emplace(std::make_pair(input_idx, pshape));
+    }
 
     /*
     for(auto item : inputs) {
@@ -231,31 +233,35 @@ Status OpenVINONetwork_::Reshape(const InputShapesMap &inputs) {
         network_shapes[input_name] = input_shape;
 
     }*/
+
+    std::size_t idx = 0;
     for(auto item : inputs) {
-        std::string input_name = item.first;
-        if (network_shapes.find(input_name) == network_shapes.end()) {
+        /*if (network_shapes.find(input_name) == network_shapes.end()) {
             return TNNERR_PARAM_ERR;
         }
-        if (item.second.size() != network_shapes.find(input_name)->second.size()) {
+	if (item.second.size() != network_shapes.find(input_name)->second.size()) {
+            return TNNERR_PARAM_ERR;
+        }
+	*/
+	if (network_shapes.find(idx) == network_shapes.end()) {
+	    return TNNERR_PARAM_ERR;
+	}
+        if (item.second.size() != network_shapes.find(idx)->second.size()) {
             return TNNERR_PARAM_ERR;
         }
 	
 	//ov::SizeVector input_shape;
-	//std::vector<ov::PartialShape> input_shape;
-	//std::vector<size_t> input_shape
 	std::vector<ov::Dimension> dimensions;
-
         for(int i=0;i<item.second.size();i++) {
 	    ov::Dimension dimension = ov::Dimension(item.second[i]);
 	    dimensions.push_back(dimension);
             //input_shape.push_back(item.second[i]);
         }
 	ov::PartialShape input_shape = ov::PartialShape(dimensions);
-
-        network_shapes[input_name] = input_shape;
-
+        //network_shapes[input_name] = input_shape;
+	network_shapes[idx] = input_shape;
+	idx++;
     }
-
 
     network_->reshape(network_shapes);
 
@@ -291,23 +297,21 @@ Status OpenVINONetwork_::Reshape(const InputShapesMap &inputs) {
         }
     }
     */
-
     //auto input_map = executable_network_.GetInputsInfo();
     const std::vector<ov::Output<const ov::Node>>& inputs_info = executable_network_.inputs();
     //for(auto item : input_map) {
     for (int i = 0; i < inputs_info.size(); i++) {
 	ov::Output<const ov::Node> item = inputs_info[i];
-        //std::string key = item.first;
-	std::string key = item.get_any_name();
+
+	std::string key = item.get_node()->get_friendly_name();
+	std::size_t idx = item.get_index();
+
         //auto blob_ptr = infer_request_.GetBlob(key);
-	ov::Tensor tensor = infer_request_.get_tensor(key);
+	ov::Tensor tensor = infer_request_.get_input_tensor(idx);
 	const std::shared_ptr<ov::descriptor::Tensor> tensor_ptr = item.get_tensor_ptr();
 	
-	//ov::descriptor::Tensor& item.get_tensor();
-
         BlobDesc desc;
         desc.data_format = DATA_FORMAT_NCHW;
-        //desc.name = key;
 	desc.name = key;
         desc.device_type = DEVICE_X86;
         //desc.data_type = ConvertOVPrecisionToDataType(blob_ptr->getTensorDesc().getPrecision());
@@ -315,7 +319,6 @@ Status OpenVINONetwork_::Reshape(const InputShapesMap &inputs) {
 	desc.data_type = ConvertOVPrecisionToDataType(element_type);
 
         //auto dims = blob_ptr->getTensorDesc().getDims();
-	//const PartialShape& pshape = tensor_ptr->get_partial_shape();
 	const ov::Shape dims = tensor_ptr->get_shape();
         for(int index = 0; index<dims.size(); index++) {
             desc.dims.push_back(dims[index]);
@@ -323,8 +326,7 @@ Status OpenVINONetwork_::Reshape(const InputShapesMap &inputs) {
 
         BlobHandle handle;
         //handle.base = blob_ptr->buffer().as<ov::PrecisionTrait<ov::Precision::FP32>::value_type*>();
-	//handle.base = tensor.data().as<ov::element_type_traits<ov::element::Type_t::f32>::value_type*>();
-	handle.base = tensor.data<ov::element_type_traits<ov::element::f32>::value_type*>();
+	handle.base = tensor.data<ov::element_type_traits<ov::element::Type_t::f32>::value_type>();
 
         if (input_blob_map_.find(key) != input_blob_map_.end())  {
             input_blob_map_[key]->SetBlobDesc(desc);
@@ -363,9 +365,10 @@ Status OpenVINONetwork_::Reshape(const InputShapesMap &inputs) {
     for (int i = 0; i < outputs_info.size(); i++) {
         ov::Output<const ov::Node> item = outputs_info[i];
         //std::string key = item.first;
-	std::string key = item.get_any_name();
-        //auto blob_ptr = infer_request_.GetBlob(key);
-	ov::Tensor tensor = infer_request_.get_tensor(key);
+	std::string key = item.get_node()->get_friendly_name();
+	std::size_t idx = item.get_index();
+
+	ov::Tensor tensor = infer_request_.get_output_tensor(idx);
 	const std::shared_ptr<ov::descriptor::Tensor> tensor_ptr = item.get_tensor_ptr();
 
         BlobDesc desc;
@@ -383,7 +386,7 @@ Status OpenVINONetwork_::Reshape(const InputShapesMap &inputs) {
         }
         BlobHandle handle;
         //handle.base = blob_ptr->buffer().as<ov::PrecisionTrait<ov::Precision::FP32>::value_type*>();
-	handle.base = tensor.data<ov::element_type_traits<ov::element::f32>::value_type*>();
+	handle.base = tensor.data<ov::element_type_traits<ov::element::Type_t::f32>::value_type>();
         if (output_blob_map_.find(key) != output_blob_map_.end())  {
             output_blob_map_[key]->SetBlobDesc(desc);
             output_blob_map_[key]->SetHandle(handle);
@@ -391,7 +394,6 @@ Status OpenVINONetwork_::Reshape(const InputShapesMap &inputs) {
             output_blob_map_[key] = new Blob(desc, handle);
         }
     }
-
 
     return TNN_OK;
 }
@@ -525,15 +527,23 @@ Status OpenVINONetwork_::Forward() {
     //infer_request_.Infer();
     infer_request_.infer();
 #if TNN_PROFILE
-    auto perf_count = infer_request_.GetPerformanceCounts();
-    for (auto iter : perf_count) {
-        if (std::string(iter.second.layer_type).find("Custom") != std::string::npos) {
-            continue;
-        }
+    //auto perf_count = infer_request_.GetPerformanceCounts();
+    std::vector<ov::ProfilingInfo> profiling_info = infer_request_.get_profiling_info();
+    //for (auto iter : perf_count) {
+    for (auto iter : profiling_info) {
+        //if (std::string(iter.second.layer_type).find("Custom") != std::string::npos) {
+        //    continue;
+        //}
+	if (std::string(iter.node_type).find("Custom") != std::string::npos) {
+	    continue;
+	}
         auto pdata = std::make_shared<ProfilingData>();
-        pdata->layer_name = iter.first;
-        pdata->op_name = iter.second.layer_type;
-        pdata->kernel_time = iter.second.cpu_uSec / 1000.0f;
+        //pdata->layer_name = iter.first;
+	pdata->layer_name = iter.node_name;
+        //pdata->op_name = iter.second.layer_type;
+	pdata->op_name = iter.node_type;
+        //pdata->kernel_time = iter.second.cpu_uSec / 1000.0f;
+	pdata->kernel_time = iter.cpu_time.count(); //ms
         context_->AddProfilingData(pdata);
     }
 #endif
