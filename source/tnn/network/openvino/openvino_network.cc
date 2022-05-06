@@ -129,11 +129,15 @@ Status OpenVINONetwork_::SetNetInputNode() {
 Status OpenVINONetwork_::BuildNgraphNetwork(NetStructure *net_structure) {
     ov::ParameterVector input_nodes;
     for(auto it : net_structure->inputs_shape_map) {
-        auto name = it.first;
-        auto input_tensor = dynamic_cast<ForeignBlob*>(blob_manager_->GetBlob(name))->GetForeignTensor();
-        auto input_openvino_tensor = std::dynamic_pointer_cast<OpenvinoTensor>(input_tensor);
+	auto name = it.first;
+	auto input_tensor = dynamic_cast<ForeignBlob*>(blob_manager_->GetBlob(name))->GetForeignTensor();
+	auto input_openvino_tensor = std::dynamic_pointer_cast<OpenvinoTensor>(input_tensor);
 	input_openvino_tensor->GetNode()->set_friendly_name(name);
-	input_nodes.push_back(std::dynamic_pointer_cast<ov::opset8::Parameter>(input_openvino_tensor->GetNode()));
+	std::shared_ptr<ov::opset8::Parameter> input_node = std::dynamic_pointer_cast<ov::opset8::Parameter>(input_openvino_tensor->GetNode());
+	std::unordered_set<std::string> names;
+	names.insert(name.c_str());
+	input_node->get_output_tensor(0).set_names(names);
+	input_nodes.push_back(input_node);
     }
 
     ov::NodeVector output_nodes;
@@ -142,6 +146,9 @@ Status OpenVINONetwork_::BuildNgraphNetwork(NetStructure *net_structure) {
         auto output_openvino_tensor = std::dynamic_pointer_cast<OpenvinoTensor>(output_tensor);
 	auto result_node = std::make_shared<ov::opset8::Result>(output_openvino_tensor->GetNode());
 	result_node->set_friendly_name(name);
+	std::unordered_set<std::string> names;
+	names.insert(name.c_str());
+	result_node->get_output_tensor(0).set_names(names);
         output_nodes.push_back(result_node);
     } 
     
@@ -179,52 +186,46 @@ Status OpenVINONetwork_::GetAllOutputBlobs(BlobMap &blobs) {
 Status OpenVINONetwork_::Reshape(const InputShapesMap &inputs) {
     RETURN_ON_NEQ(DefaultNetwork::Reshape(inputs), TNN_OK);
 
-    std::map<std::size_t, ov::PartialShape> network_shapes;
+    std::map<std::string, ov::PartialShape> network_shapes;
     for (const ov::Output<ov::Node>& input : network_->inputs()) {
-        ov::PartialShape pshape = input.get_partial_shape();
+	ov::PartialShape pshape = input.get_partial_shape();
 	std::string input_name = input.get_node()->get_friendly_name();
-	std::size_t input_idx = input.get_index();
-	network_shapes.emplace(std::make_pair(input_idx, pshape));
+	network_shapes.emplace(std::make_pair(input_name, pshape));
     }
 
-    std::size_t idx = 0;
     for(auto item : inputs) {
-	if (network_shapes.find(idx) == network_shapes.end()) {
+	std::string input_name = item.first;
+	if (network_shapes.find(input_name) == network_shapes.end()) {
 	    return TNNERR_PARAM_ERR;
 	}
-        if (item.second.size() != network_shapes.find(idx)->second.size()) {
+	if (item.second.size() != network_shapes.find(input_name)->second.size()) {
             return TNNERR_PARAM_ERR;
-        }
-	
+	}
 	std::vector<ov::Dimension> dimensions;
         for(int i=0;i<item.second.size();i++) {
 	    ov::Dimension dimension = ov::Dimension(item.second[i]);
 	    dimensions.push_back(dimension);
-        }
+	}
 	ov::PartialShape input_shape = ov::PartialShape(dimensions);
-	network_shapes[idx] = input_shape;
-	idx++;
+	network_shapes[input_name] = input_shape;
     }
 
     network_->reshape(network_shapes);
 
     executable_network_ = ie_.compile_model(network_, "CPU");
     infer_request_ = executable_network_.create_infer_request();
-    
+
     const std::vector<ov::Output<const ov::Node>>& inputs_info = executable_network_.inputs();
     for (int i = 0; i < inputs_info.size(); i++) {
 	ov::Output<const ov::Node> item = inputs_info[i];
-
 	std::string key = item.get_node()->get_friendly_name();
-	std::size_t idx = item.get_index();
-
-	ov::Tensor tensor = infer_request_.get_input_tensor(idx);
+	ov::Tensor tensor = infer_request_.get_tensor(key);
 	const std::shared_ptr<ov::descriptor::Tensor> tensor_ptr = item.get_tensor_ptr();
-	
+
         BlobDesc desc;
-        desc.data_format = DATA_FORMAT_NCHW;
+	desc.data_format = DATA_FORMAT_NCHW;
 	desc.name = key;
-        desc.device_type = DEVICE_X86;
+	desc.device_type = DEVICE_X86;
 	const ov::element::Type& element_type = tensor_ptr->get_element_type();
 	desc.data_type = ConvertOVPrecisionToDataType(element_type);
 
@@ -233,7 +234,7 @@ Status OpenVINONetwork_::Reshape(const InputShapesMap &inputs) {
             desc.dims.push_back(dims[index]);
         }
 
-        BlobHandle handle;
+	BlobHandle handle;
 	handle.base = tensor.data<ov::element_type_traits<ov::element::Type_t::f32>::value_type>();
 
         if (input_blob_map_.find(key) != input_blob_map_.end())  {
@@ -243,28 +244,26 @@ Status OpenVINONetwork_::Reshape(const InputShapesMap &inputs) {
             input_blob_map_[key] = new Blob(desc, handle);
         }
     }
+
     const std::vector<ov::Output<const ov::Node>>& outputs_info = executable_network_.outputs();
     for (int i = 0; i < outputs_info.size(); i++) {
         ov::Output<const ov::Node> item = outputs_info[i];
-        //std::string key = item.first;
 	std::string key = item.get_node()->get_friendly_name();
-	std::size_t idx = item.get_index();
-
-	ov::Tensor tensor = infer_request_.get_output_tensor(idx);
+	ov::Tensor tensor = infer_request_.get_tensor(key);
 	const std::shared_ptr<ov::descriptor::Tensor> tensor_ptr = item.get_tensor_ptr();
 
         BlobDesc desc;
-        desc.data_format = DATA_FORMAT_NCHW;
-        desc.name = key;
-        desc.device_type = DEVICE_X86;
-        
+	desc.data_format = DATA_FORMAT_NCHW;
+	desc.name = key;
+	desc.device_type = DEVICE_X86;
+
 	const ov::element::Type& element_type = tensor_ptr->get_element_type();
 	desc.data_type = ConvertOVPrecisionToDataType(element_type);
 	const ov::Shape dims = tensor_ptr->get_shape();
-        for(int index = 0; index<dims.size(); index++) {
-            desc.dims.push_back(dims[index]);
+	for(int index = 0; index<dims.size(); index++) {
+	    desc.dims.push_back(dims[index]);
         }
-        BlobHandle handle;
+	BlobHandle handle;
 	handle.base = tensor.data<ov::element_type_traits<ov::element::Type_t::f32>::value_type>();
         if (output_blob_map_.find(key) != output_blob_map_.end())  {
             output_blob_map_[key]->SetBlobDesc(desc);
