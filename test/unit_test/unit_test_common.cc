@@ -52,6 +52,7 @@ void SetUpEnvironment(AbstractDevice** cpu, AbstractDevice** device,
                        Context** cpu_context, Context** device_context) {
     NetworkConfig config;
     config.device_type = ConvertDeviceType(FLAGS_dt);
+    config.network_type = ConvertNetworkType(FLAGS_nt);
     config.enable_tune_kernel = FLAGS_et;
     if (FLAGS_lp.length() > 0) {
         config.library_path = {FLAGS_lp};
